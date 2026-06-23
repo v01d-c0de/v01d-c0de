@@ -208,6 +208,16 @@ Scene_Coop.prototype.setupConnection = function(isLoad) {
             }
         }
         
+                // НОВОЕ: Обработка пинга
+        else if (data.type === 'ping') {
+            // Получили пинг — сразу шлем ответ
+            window.CoopNetwork.connection.send({ type: 'pong', time: data.time });
+        }
+        else if (data.type === 'pong') {
+            // Получили ответ — вычисляем время
+            window.CoopNetwork.ping = Date.now() - data.time;
+        }
+        
         window.CoopNetwork.isReceivingData = false; 
     });
 
@@ -300,10 +310,12 @@ Spriteset_Map.prototype.update = function() {
             this._coopGhost.opacity = 255;
             this._coopGhostChar.update();
             const dist = Math.abs(this._coopGhostChar.x - data.x) + Math.abs(this._coopGhostChar.y - data.y);
-            if (dist > 1) {
+                        if (dist > 4) {
+                // Если расстояние больше 4 (например, телепорт через меню) — прыгаем
                 this._coopGhostChar.locate(data.x, data.y);
                 this._coopGhostChar.setDirection(data.direction);
             } else if (dist > 0 && !this._coopGhostChar.isMoving()) {
+                // Если бежим спринтом (расстояние 2-3), призрак просто будет идти за тобой без ТП
                 const dir = this._coopGhostChar.findDirectionTo(data.x, data.y);
                 if (dir > 0) this._coopGhostChar.moveStraight(dir);
             } else if (dist === 0 && !this._coopGhostChar.isMoving()) {
@@ -380,5 +392,48 @@ DataManager.extractSaveContents = function(contents) {
         }
     } else {
         window.CoopNetwork.guestState = null;
+    }
+};
+
+// =========================================================================
+// 7. ИНДИКАТОР СЕТИ (Пинг и HTML UI)
+// =========================================================================
+window.CoopNetwork.ping = 0;
+window.CoopNetwork.lastPingTime = 0;
+
+// Создаем HTML элемент для надписи
+function createPingUI() {
+    if (document.getElementById('coop-ping-ui')) return;
+    const div = document.createElement('div');
+    div.id = 'coop-ping-ui';
+    div.style.cssText = 'position: fixed; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: #00ff00; padding: 5px 10px; font-family: Arial; font-size: 16px; z-index: 9999; border-radius: 5px; pointer-events: none;';
+    document.body.appendChild(div);
+}
+
+// Обновляем интерфейс каждый кадр
+const _SceneManager_updateScene = SceneManager.updateScene;
+SceneManager.updateScene = function() {
+    _SceneManager_updateScene.call(this);
+    
+    if (window.CoopNetwork.connection && window.CoopNetwork.connection.open) {
+        // Отправляем пинг каждые 2 секунды
+        if (Date.now() - window.CoopNetwork.lastPingTime > 2000) {
+            window.CoopNetwork.lastPingTime = Date.now();
+            window.CoopNetwork.connection.send({ type: 'ping', time: Date.now() });
+        }
+        
+        // Рисуем результат
+        createPingUI();
+        const ui = document.getElementById('coop-ping-ui');
+        const p = window.CoopNetwork.ping;
+        
+        if (p < 80) ui.style.color = '#00ff00'; // Зеленый (Отлично)
+        else if (p < 150) ui.style.color = '#ffff00'; // Желтый (Норм)
+        else ui.style.color = '#ff0000'; // Красный (Плохо)
+        
+        ui.textContent = `Пинг: ${p} мс`;
+    } else {
+        const ui = document.getElementById('coop-ping-ui');
+        if (ui) ui.remove(); // Скрываем, если не в сети
     }
 };
