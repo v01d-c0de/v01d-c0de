@@ -69,7 +69,6 @@ Scene_Coop.prototype.createCoopWindow = function() {
     this._coopWindow.setHandler("host", this.commandHost.bind(this));
     this._coopWindow.setHandler("host_load", this.commandHostLoad.bind(this));
     this._coopWindow.setHandler("guest", this.commandGuest.bind(this));
-    this._coopWindow.setHandler("guest_load", this.commandGuestLoad.bind(this));
     this._coopWindow.setHandler("cancel", this.popScene.bind(this));
     this.addWindow(this._coopWindow);
 };
@@ -146,7 +145,7 @@ Scene_Coop.prototype.commandHostLoad = function() {
     });
 };
 
-// --- НОВАЯ ИГРА (ГОСТЬ) ---
+// --- ВХОД В ИГРУ (ГОСТЬ) ---
 Scene_Coop.prototype.commandGuest = function() {
     this._coopWindow.deactivate();
     window.CoopNetwork.isHost = false;
@@ -163,7 +162,7 @@ Scene_Coop.prototype.commandGuest = function() {
 
     window.CoopNetwork.peer.on('open', () => {
         window.CoopNetwork.connection = window.CoopNetwork.peer.connect("RPGMZ_" + code);
-        this.setupConnection(false); // false = не загружать сохранение
+        this.setupConnection(false); // Гость никогда не загружает локально
     });
 
     window.CoopNetwork.peer.on('error', (err) => {
@@ -175,34 +174,6 @@ Scene_Coop.prototype.commandGuest = function() {
     });
 };
 
-// --- ЗАГРУЗКА ИГРЫ (ГОСТЬ) ---
-Scene_Coop.prototype.commandGuestLoad = function() {
-    this._coopWindow.deactivate();
-    window.CoopNetwork.isHost = false;
-
-    const code = prompt("Введите код комнаты (4 цифры):");
-    if (!code || code.length !== 4) {
-        this.updateStatus("Неверный код. Попробуйте снова.");
-        this._coopWindow.activate();
-        return;
-    }
-
-    this.updateStatus("Подключение к комнате " + code + "...");
-    window.CoopNetwork.peer = new Peer();
-
-    window.CoopNetwork.peer.on('open', () => {
-        window.CoopNetwork.connection = window.CoopNetwork.peer.connect("RPGMZ_" + code);
-        this.setupConnection(true); // true = загрузить сохранение
-    });
-
-    window.CoopNetwork.peer.on('error', (err) => {
-        console.error(err);
-        if (err.type === 'peer-unavailable') {
-            this.updateStatus("Комната не найдена. Проверьте код.");
-            this._coopWindow.activate();
-        }
-    });
-};
 
 // --- НАСТРОЙКА СОЕДИНЕНИЯ ---
 Scene_Coop.prototype.setupConnection = function(isLoad) {
@@ -226,7 +197,7 @@ Scene_Coop.prototype.setupConnection = function(isLoad) {
         }, 1000);
     });
 
-    window.CoopNetwork.connection.on('data', (data) => {
+        window.CoopNetwork.connection.on('data', (data) => {
         window.CoopNetwork.isReceivingData = true; 
         
         if (data.type === 'position') {
@@ -238,6 +209,24 @@ Scene_Coop.prototype.setupConnection = function(isLoad) {
             $gameSelfSwitches.setValue(key, p.value);
             if ($gameMap.mapId() === p.mapId) {
                 $gameMap.refresh(); 
+            }
+        }
+        // НОВОЕ: Хост получает инвентарь от Гостя и сохраняет в памяти
+        else if (data.type === 'guest_state_update') {
+            if (window.CoopNetwork.isHost) {
+                window.CoopNetwork.guestState = data.payload;
+            }
+        }
+        // НОВОЕ: Гость получает свой старый инвентарь от Хоста при загрузке
+        else if (data.type === 'restore_guest_state') {
+            if (!window.CoopNetwork.isHost) {
+                const p = data.payload;
+                $gameParty._items = p.items;
+                $gameParty._weapons = p.weapons;
+                $gameParty._armors = p.armors;
+                $gameParty._gold = p.gold;
+                $gamePlayer.reserveTransfer(p.mapId, p.x, p.y, 2, 0); // Телепортируем гостя на его место
+                $gameMessage.add("Ваши данные синхронизированы с Хостом.");
             }
         }
         
@@ -263,8 +252,7 @@ Window_Coop.prototype.initialize = function(rect) {
 Window_Coop.prototype.makeCommandList = function() {
     this.addCommand("Новая игра (Хост)", "host");
     this.addCommand("Загрузить игру (Хост)", "host_load");
-    this.addCommand("Новая игра (Гость)", "guest");
-    this.addCommand("Загрузить игру (Гость)", "guest_load");
+    this.addCommand("Войти в игру (Гость)", "guest");
     this.addCommand("Назад", "cancel");
 };
 
@@ -373,5 +361,78 @@ Game_SelfSwitches.prototype.setValue = function(key, value) {
             }
         };
         window.CoopNetwork.connection.send(data);
+    }
+};
+
+// =========================================================================
+// 5. ЗАПРЕТ СОХРАНЕНИЯ ДЛЯ ГОСТЯ
+// =========================================================================
+const _Window_MenuCommand_addSaveCommand = Window_MenuCommand.prototype.addSaveCommand;
+Window_MenuCommand.prototype.addSaveCommand = function() {
+    // Если мы гость и в сети - прячем кнопку сохранения
+    const isGuest = window.CoopNetwork.connection && !window.CoopNetwork.isHost;
+    if (!isGuest) {
+        _Window_MenuCommand_addSaveCommand.call(this);
+    }
+};
+
+// =========================================================================
+// 6. СОХРАНЕНИЕ И ВОССТАНОВЛЕНИЕ ДАННЫХ ГОСТЯ У ХОСТА
+// =========================================================================
+
+// Хранилище в памяти для данных гостя
+window.CoopNetwork.guestState = null;
+
+// А) Отправка данных. Гость шлет свой инвентарь Хосту при каждом получении предмета
+const _Game_Party_gainItem = Game_Party.prototype.gainItem;
+Game_Party.prototype.gainItem = function(item, amount, includeEquip) {
+    _Game_Party_gainItem.call(this, item, amount, includeEquip);
+    
+    // Если мы Гость и мы в сети - отправляем свой инвентарь Хосту
+    if (window.CoopNetwork.connection && window.CoopNetwork.connection.open && !window.CoopNetwork.isHost) {
+        const state = {
+            type: 'guest_state_update',
+            payload: {
+                items: $gameParty._items,
+                weapons: $gameParty._weapons,
+                armors: $gameParty._armors,
+                gold: $gameParty._gold,
+                mapId: $gameMap.mapId(),
+                x: $gamePlayer.x,
+                y: $gamePlayer.y
+            }
+        };
+        window.CoopNetwork.connection.send(state);
+    }
+};
+
+// Б) Упаковка в сейв Хоста. Перехватываем создание сохранения
+const _DataManager_makeSaveContents = DataManager.makeSaveContents;
+DataManager.makeSaveContents = function() {
+    const contents = _DataManager_makeSaveContents.call(this);
+    // Если мы Хост и гость подключен, прячем его данные в наш сейв
+    if (window.CoopNetwork.isHost && window.CoopNetwork.guestState) {
+        contents.coopGuestState = window.CoopNetwork.guestState;
+    }
+    return contents;
+};
+
+// В) Распаковка из сейва Хоста. Перехватываем загрузку сохранения
+const _DataManager_extractSaveContents = DataManager.extractSaveContents;
+DataManager.extractSaveContents = function(contents) {
+    _DataManager_extractSaveContents.call(this, contents);
+    // Если мы Хост, достаем данные гостя из сейва
+    if (contents.coopGuestState) {
+        window.CoopNetwork.guestState = contents.coopGuestState;
+        
+        // Если гость сейчас в сети, сразу отправляем ему его вещи!
+        if (window.CoopNetwork.connection && window.CoopNetwork.connection.open) {
+            window.CoopNetwork.connection.send({
+                type: 'restore_guest_state',
+                payload: window.CoopNetwork.guestState
+            });
+        }
+    } else {
+        window.CoopNetwork.guestState = null;
     }
 };
