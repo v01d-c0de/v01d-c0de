@@ -62,12 +62,14 @@ Scene_Coop.prototype.create = function() {
 };
 
 Scene_Coop.prototype.createCoopWindow = function() {
-    const rect = new Rectangle(0, 0, 300, 140);
+    const rect = new Rectangle(0, 0, 320, 180); // Увеличили высоту под новые кнопки
     rect.x = (Graphics.width - rect.width) / 2;
     rect.y = (Graphics.height - rect.height) / 2;
     this._coopWindow = new Window_Coop(rect);
     this._coopWindow.setHandler("host", this.commandHost.bind(this));
+    this._coopWindow.setHandler("host_load", this.commandHostLoad.bind(this));
     this._coopWindow.setHandler("guest", this.commandGuest.bind(this));
+    this._coopWindow.setHandler("guest_load", this.commandGuestLoad.bind(this));
     this._coopWindow.setHandler("cancel", this.popScene.bind(this));
     this.addWindow(this._coopWindow);
 };
@@ -75,7 +77,7 @@ Scene_Coop.prototype.createCoopWindow = function() {
 Scene_Coop.prototype.createStatusWindow = function() {
     const rect = new Rectangle(0, 0, 400, 120);
     rect.x = (Graphics.width - rect.width) / 2;
-    rect.y = (Graphics.height / 2) + 80;
+    rect.y = (Graphics.height / 2) + 100;
     this._statusWindow = new Window_Base(rect);
     this.addWindow(this._statusWindow);
     this.updateStatus("Выберите роль для игры.");
@@ -86,13 +88,13 @@ Scene_Coop.prototype.updateStatus = function(text) {
     this._statusWindow.drawText(text, 0, 0, this._statusWindow.innerWidth, "center");
 };
 
+// --- НОВАЯ ИГРА (ХОСТ) ---
 Scene_Coop.prototype.commandHost = function() {
     this._coopWindow.deactivate();
     window.CoopNetwork.isHost = true;
     
     const code = Math.floor(1000 + Math.random() * 9000).toString();
     window.CoopNetwork.roomCode = code;
-    
     window.CoopNetwork.peer = new Peer("RPGMZ_" + code);
 
     this.updateStatus("Создание комнаты... Код: " + code);
@@ -103,7 +105,7 @@ Scene_Coop.prototype.commandHost = function() {
 
     window.CoopNetwork.peer.on('connection', (conn) => {
         window.CoopNetwork.connection = conn;
-        this.setupConnection();
+        this.setupConnection(false); // false = не загружать сохранение
     });
 
     window.CoopNetwork.peer.on('error', (err) => {
@@ -115,12 +117,41 @@ Scene_Coop.prototype.commandHost = function() {
     });
 };
 
+// --- ЗАГРУЗКА ИГРЫ (ХОСТ) ---
+Scene_Coop.prototype.commandHostLoad = function() {
+    this._coopWindow.deactivate();
+    window.CoopNetwork.isHost = true;
+    
+    const code = Math.floor(1000 + Math.random() * 9000).toString();
+    window.CoopNetwork.roomCode = code;
+    window.CoopNetwork.peer = new Peer("RPGMZ_" + code);
+
+    this.updateStatus("Создание комнаты... Код: " + code);
+
+    window.CoopNetwork.peer.on('open', (id) => {
+        this.updateStatus("Комната создана! Код: " + code + "\nЖдем подключения...");
+    });
+
+    window.CoopNetwork.peer.on('connection', (conn) => {
+        window.CoopNetwork.connection = conn;
+        this.setupConnection(true); // true = загрузить сохранение
+    });
+
+    window.CoopNetwork.peer.on('error', (err) => {
+        console.error(err);
+        if (err.type === 'unavailable-id') {
+            this.updateStatus("Ошибка: Код занят. Попробуйте еще раз.");
+            this._coopWindow.activate();
+        }
+    });
+};
+
+// --- НОВАЯ ИГРА (ГОСТЬ) ---
 Scene_Coop.prototype.commandGuest = function() {
     this._coopWindow.deactivate();
     window.CoopNetwork.isHost = false;
 
     const code = prompt("Введите код комнаты (4 цифры):");
-    
     if (!code || code.length !== 4) {
         this.updateStatus("Неверный код. Попробуйте снова.");
         this._coopWindow.activate();
@@ -132,7 +163,7 @@ Scene_Coop.prototype.commandGuest = function() {
 
     window.CoopNetwork.peer.on('open', () => {
         window.CoopNetwork.connection = window.CoopNetwork.peer.connect("RPGMZ_" + code);
-        this.setupConnection();
+        this.setupConnection(false); // false = не загружать сохранение
     });
 
     window.CoopNetwork.peer.on('error', (err) => {
@@ -144,21 +175,58 @@ Scene_Coop.prototype.commandGuest = function() {
     });
 };
 
-Scene_Coop.prototype.setupConnection = function() {
+// --- ЗАГРУЗКА ИГРЫ (ГОСТЬ) ---
+Scene_Coop.prototype.commandGuestLoad = function() {
+    this._coopWindow.deactivate();
+    window.CoopNetwork.isHost = false;
+
+    const code = prompt("Введите код комнаты (4 цифры):");
+    if (!code || code.length !== 4) {
+        this.updateStatus("Неверный код. Попробуйте снова.");
+        this._coopWindow.activate();
+        return;
+    }
+
+    this.updateStatus("Подключение к комнате " + code + "...");
+    window.CoopNetwork.peer = new Peer();
+
+    window.CoopNetwork.peer.on('open', () => {
+        window.CoopNetwork.connection = window.CoopNetwork.peer.connect("RPGMZ_" + code);
+        this.setupConnection(true); // true = загрузить сохранение
+    });
+
+    window.CoopNetwork.peer.on('error', (err) => {
+        console.error(err);
+        if (err.type === 'peer-unavailable') {
+            this.updateStatus("Комната не найдена. Проверьте код.");
+            this._coopWindow.activate();
+        }
+    });
+};
+
+// --- НАСТРОЙКА СОЕДИНЕНИЯ ---
+Scene_Coop.prototype.setupConnection = function(isLoad) {
     window.CoopNetwork.connection.on('open', () => {
-        // Назначаем роли: Хост - 1 (Рид), Гость - 2 (Мишель)
         window.CoopNetwork.myActorId = window.CoopNetwork.isHost ? 1 : 2;
+        this.updateStatus("Успешное подключение!");
         
-        this.updateStatus("Успешное подключение! Запуск игры...");
         setTimeout(() => {
-            DataManager.setupNewGame();
-            SceneManager.goto(Scene_Map);
+            if (isLoad) {
+                // Открываем стандартное окно загрузки RPG Maker
+                SceneManager.push(Scene_Load);
+            } else {
+                // Начинаем новую игру
+                DataManager.setupNewGame();
+                if (!window.CoopNetwork.isHost) {
+                    $gameParty._actors = [2, 1]; // Гость играет за Мишель
+                    $gamePlayer.refresh();
+                }
+                SceneManager.goto(Scene_Map);
+            }
         }, 1000);
     });
 
-    // Обработчик получения данных
     window.CoopNetwork.connection.on('data', (data) => {
-        // Включаем флаг, чтобы не отправлять обратно то, что только что получили
         window.CoopNetwork.isReceivingData = true; 
         
         if (data.type === 'position') {
@@ -168,14 +236,12 @@ Scene_Coop.prototype.setupConnection = function() {
             const p = data.payload;
             const key = [p.mapId, p.eventId, p.switchName];
             $gameSelfSwitches.setValue(key, p.value);
-            
-            // Обновляем события на карте, чтобы сундук/дерево сразу обновились визуально
             if ($gameMap.mapId() === p.mapId) {
                 $gameMap.refresh(); 
             }
         }
         
-        window.CoopNetwork.isReceivingData = false; // Выключаем флаг
+        window.CoopNetwork.isReceivingData = false; 
     });
 
     window.CoopNetwork.connection.on('close', () => {
@@ -195,8 +261,10 @@ Window_Coop.prototype.initialize = function(rect) {
 };
 
 Window_Coop.prototype.makeCommandList = function() {
-    this.addCommand("Создать игру (Хост)", "host");
-    this.addCommand("Войти в игру (Гость)", "guest");
+    this.addCommand("Новая игра (Хост)", "host");
+    this.addCommand("Загрузить игру (Хост)", "host_load");
+    this.addCommand("Новая игра (Гость)", "guest");
+    this.addCommand("Загрузить игру (Гость)", "guest_load");
     this.addCommand("Назад", "cancel");
 };
 
@@ -210,7 +278,7 @@ Game_Player.prototype.update = function(sceneActive) {
     _Game_Player_update.call(this, sceneActive);
     
     if (window.CoopNetwork.connection && window.CoopNetwork.connection.open) {
-        // Отправляем данные ТОЛЬКО когда двигаемся или жмем кнопки (оптимизация трафика)
+        // Отправляем данные ТОЛЬКО когда двигаемся или жмем кнопки
         if (this.isMoving() || Input.dir4 > 0) {
             const myData = {
                 type: 'position',
@@ -234,7 +302,16 @@ Spriteset_Map.prototype.createLowerLayer = function() {
 
 Spriteset_Map.prototype.createCoopGhost = function() {
     this._coopGhostChar = new Game_Character();
-    this._coopGhostChar.setImage("Actor1", 0); // Можешь поменять графику призрака тут
+    
+    // Настраиваем внешность призрака в зависимости от того, кто наш партнер
+    // Хост видит Мишель (2), Гость видит Рида (1)
+    const partnerActorId = window.CoopNetwork.isHost ? 2 : 1;
+    const actor = $gameActors.actor(partnerActorId);
+    if (actor) {
+        this._coopGhostChar.setImage(actor.characterName(), actor.characterIndex());
+    } else {
+        this._coopGhostChar.setImage("Actor1", 0); // Запасной вариант
+    }
     this._coopGhostChar.setDirection(2);
     
     this._coopGhost = new Sprite_Character(this._coopGhostChar);
@@ -248,8 +325,27 @@ Spriteset_Map.prototype.update = function() {
         const data = window.CoopNetwork.partnerData;
         if (data.mapId === $gameMap.mapId()) {
             this._coopGhost.opacity = 255;
-            this._coopGhostChar.setPosition(data.x, data.y);
-            this._coopGhostChar.setDirection(data.direction);
+            
+            // ВАЖНО: Обновляем логику персонажа, чтобы он мог двигаться
+            this._coopGhostChar.update();
+            
+            // Вычисляем дистанцию между призраком и его реальной позицией
+            const dist = Math.abs(this._coopGhostChar.x - data.x) + Math.abs(this._coopGhostChar.y - data.y);
+            
+            if (dist > 1) {
+                // Если игрок телепортировался или мы сильно отстали, прыгаем к нему
+                this._coopGhostChar.locate(data.x, data.y);
+                this._coopGhostChar.setDirection(data.direction);
+            } else if (dist > 0 && !this._coopGhostChar.isMoving()) {
+                // Если расстояние 1 клетка и мы не двигаемся — делаем шаг к цели
+                const dir = this._coopGhostChar.findDirectionTo(data.x, data.y);
+                if (dir > 0) {
+                    this._coopGhostChar.moveStraight(dir);
+                }
+            } else if (dist === 0 && !this._coopGhostChar.isMoving()) {
+                // Если стоим на месте, синхронизируем направление взгляда
+                this._coopGhostChar.setDirection(data.direction);
+            }
         } else {
             this._coopGhost.opacity = 0; // Скрываем, если на разных картах
         }
