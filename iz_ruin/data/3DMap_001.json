@@ -1,0 +1,42 @@
+{
+  "environment": {
+    "skyColor": "#87CEEB",
+    "ambientLight": "#404040",
+    "skybox": "assets/textures/sky/Fading_Sky-Blue_01-1024x512.png",
+    "sunIntensity": 1,
+    "ambientIntensity": 0.8
+  },
+  "player": {
+    "src": "assets/models/player.glb",
+    "position": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "scale": {
+      "x": 1,
+      "y": 1,
+      "z": 1
+    },
+    "rotationY": 180,
+    "animations": {
+      "idle": "Idle",
+      "walk": "Walk"
+    }
+  },
+  "lights": [
+    {
+      "type": "directional",
+      "color": "#ffffff",
+      "intensity": 1,
+      "position": {
+        "x": 5,
+        "y": 10,
+        "z": 5
+      },
+      "castShadow": true
+    }
+  ],
+  "objects": [],
+  "events": []
+}
