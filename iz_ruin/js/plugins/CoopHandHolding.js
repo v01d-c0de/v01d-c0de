@@ -1,10 +1,10 @@
 // =========================================================================
-// CoopHandHolding.js - Механика "Держание за ручки"
+// CoopHandHolding.js - Механика "Держание за ручки" (Без ленточки, умное следование)
 // =========================================================================
 
 /*:
 @target MZ
-@plugindesc v1.0 Синхронизация держания за руки, меню взаимодействия, ниточка.
+@plugindesc v1.1 Синхронизация держания за руки и меню взаимодействия.
 @author Твой Ник
 */
 
@@ -14,7 +14,6 @@ window.CoopNetwork.isFollowing = false; // Я ведомый
 // Перехватываем данные из сети
 window.CoopNetwork.onData = function(data) {
     if (data.type === 'hold_request') {
-        // ИСПРАВЛЕНО ТУТ (заодно добавим проверку, что мы на карте):
         if (SceneManager._scene instanceof Scene_Map) {
             SceneManager._scene.showHandPrompt();
         }
@@ -37,12 +36,14 @@ window.CoopNetwork.onData = function(data) {
 // 1. БЛОКИРОВКА УПРАВЛЕНИЯ И АВТО-СЛЕДОВАНИЕ (ДЛЯ ВЕДОМОГО)
 // =========================================================================
 
+// Блокируем ходьбу от клавиатуры, если мы ведомые
 const _Game_Player_moveByInput_hh = Game_Player.prototype.moveByInput;
 Game_Player.prototype.moveByInput = function() {
     if (window.CoopNetwork.isFollowing) return;
     _Game_Player_moveByInput_hh.call(this);
 };
 
+// Умное следование за ведущим (как спутник в отряде)
 const _Game_Player_update_hh = Game_Player.prototype.update;
 Game_Player.prototype.update = function(sceneActive) {
     _Game_Player_update_hh.call(this, sceneActive);
@@ -52,19 +53,26 @@ Game_Player.prototype.update = function(sceneActive) {
         if (target.mapId === $gameMap.mapId()) {
             const dist = Math.abs(this.x - target.x) + Math.abs(this.y - target.y);
             
-            if (dist > 2) {
-                this.locate(target.x, target.y);
-            } else if (dist === 1) {
+            if (dist > 1) {
+                // Если ведущий отошел больше чем на 1 клетку — ищем путь к нему
                 const dir = this.findDirectionTo(target.x, target.y);
-                this.moveStraight(dir);
-            } else if (dist === 0) {
+                if (dir > 0) {
+                    this.moveStraight(dir);
+                }
+            } else if (dist === 1) {
+                // Если стоим вплотную — просто поворачиваемся к нему лицом
                 const dir = this.findDirectionTo(target.x, target.y);
                 if (dir > 0) this.setDirection(dir);
+            } else if (dist === 0) {
+                // Если из-за пинга мы наступили на одну клетку — делаем шаг назад
+                const reverseDir = this.reverseDir(this.direction());
+                this.moveStraight(reverseDir);
             }
         }
     }
 };
 
+// Отпускание рук по кнопке Esc (Cancel)
 const _Scene_Map_update_hh = Scene_Map.prototype.update;
 Scene_Map.prototype.update = function() {
     _Scene_Map_update_hh.call(this);
@@ -82,11 +90,6 @@ Scene_Map.prototype.update = function() {
 // =========================================================================
 // 2. ВЗАИМОДЕЙСТВИЕ (Нажать Энтер рядом с игроком)
 // =========================================================================
-
-const _Scene_Map_processMapTouch_hh = Scene_Map.prototype.processMapTouch;
-Scene_Map.prototype.processMapTouch = function() {
-    _Scene_Map_processMapTouch_hh.call(this);
-};
 
 const _Game_Player_triggerAction_hh = Game_Player.prototype.triggerAction;
 Game_Player.prototype.triggerAction = function() {
@@ -166,41 +169,4 @@ Window_Prompt.prototype.initialize = function(rect) { Window_Command.prototype.i
 Window_Prompt.prototype.makeCommandList = function() {
     this.addCommand("Согласиться", "yes");
     this.addCommand("Отказать", "no");
-};
-
-// =========================================================================
-// 4. РИСОВАНИЕ НИТОЧКИ МЕЖДУ ИГРОКАМИ
-// =========================================================================
-
-const _Spriteset_Map_createLowerLayer_hh = Spriteset_Map.prototype.createLowerLayer;
-Spriteset_Map.prototype.createLowerLayer = function() {
-    _Spriteset_Map_createLowerLayer_hh.call(this);
-    this._handRibbon = new PIXI.Graphics();
-    this.addChild(this._handRibbon);
-};
-
-const _Spriteset_Map_update_hh = Spriteset_Map.prototype.update;
-Spriteset_Map.prototype.update = function() {
-    _Spriteset_Map_update_hh.call(this);
-    
-    if (this._handRibbon && this._coopGhost) {
-        this._handRibbon.clear();
-        
-        if ((window.CoopNetwork.isLeading || window.CoopNetwork.isFollowing) && this._coopGhost.opacity > 0) {
-            let p1x = $gamePlayer.screenX();
-            let p1y = $gamePlayer.screenY() - 24; 
-            
-            let p2x = this._coopGhostChar.screenX();
-            let p2y = this._coopGhostChar.screenY() - 24;
-            
-            this._handRibbon.lineStyle(4, 0xff69b4, 1);
-            this._handRibbon.moveTo(p1x, p1y);
-            this._handRibbon.lineTo(p2x, p2y);
-            
-            this._handRibbon.lineStyle(0);
-            this._handRibbon.beginFill(0xff0000, 1);
-            this._handRibbon.drawCircle((p1x + p2x) / 2, (p1y + p2y) / 2, 5);
-            this._handRibbon.endFill();
-        }
-    }
 };
