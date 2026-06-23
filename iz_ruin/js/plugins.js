@@ -4,5 +4,7 @@ var $plugins =
 [
 {"name":"Hendrix_Map_Zoom","status":false,"description":"Zoom your map. This plugin is compatible with all Sang Hendrix plugins.","parameters":{"mapZoomValue":"2.0","pixelateGame":"false"}},
 {"name":"QuestMenuMZ","status":false,"description":"Отдельное меню для заданий (предметов с тегом <quest>)","parameters":{"Command Name":"Задания"}},
-{"name":"CoopPeer","status":true,"description":"v1.0 Простая синхронизация 2 игроков через PeerJS.","parameters":{}}
+{"name":"CoopPeer","status":true,"description":"v1.0 Простая синхронизация 2 игроков через PeerJS.","parameters":{}},
+{"name":"CoopChat","status":false,"description":"v1.0 Чат и никнеймы для кооперативного режима. HTML5 интерфейс.","parameters":{}},
+{"name":"CoopHandHolding","status":true,"description":"v1.0 Синхронизация держания за руки, меню взаимодействия, ниточка.","parameters":{}}
 ];
