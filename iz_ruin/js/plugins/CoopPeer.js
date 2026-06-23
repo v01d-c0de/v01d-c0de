@@ -164,6 +164,8 @@ Scene_Coop.prototype.setupConnection = function(isLoad) {
     });
 
     window.CoopNetwork.connection.on('data', (data) => {
+        // ДОБАВИТЬ ЭТУ СТРОКУ:
+        if (window.CoopNetwork.onData) window.CoopNetwork.onData(data);
         window.CoopNetwork.isReceivingData = true; 
         
         if (data.type === 'position') {
