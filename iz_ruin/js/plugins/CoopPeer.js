@@ -4,25 +4,25 @@
 
 /*:
 @target MZ
-@plugindesc v3.0 Кооператив через PeerJS. Синхронизация движения, переключателей, ролей.
+@plugindesc v6.0 Кооператив. Стабильная синхронизация свитчей, переменных, карт.
 @author Твой Ник
 */
 
-// Наш глобальный объект сети
 window.CoopNetwork = {
     peer: null,
     connection: null,
     isHost: false,
     partnerData: { x: 0, y: 0, mapId: 0, direction: 2 },
     roomCode: null,
-    myActorId: 0, // 1 для Хоста (Рид), 2 для Гостя (Мишель)
-    isReceivingData: false // Флаг для предотвращения бесконечного цикла отправки
+    myActorId: 0,
+    isReceivingData: false,
+    guestState: null,
+    pendingSync: null // Данные, ждущие применения на карте
 };
 
 // =========================================================================
-// 1. ДОБАВЛЕНИЕ КНОПКИ В ГЛАВНОЕ МЕНЮ
+// 1. КНОПКА В ГЛАВНОМ МЕНЮ
 // =========================================================================
-
 const _Window_TitleCommand_makeCommandList = Window_TitleCommand.prototype.makeCommandList;
 Window_TitleCommand.prototype.makeCommandList = function() {
     _Window_TitleCommand_makeCommandList.call(this);
@@ -41,19 +41,13 @@ Scene_Title.prototype.commandCoop = function() {
 };
 
 // =========================================================================
-// 2. СОЗДАНИЕ СЦЕНЫ КООПЕРАТИВА
+// 2. СЦЕНА КООПЕРАТИВА
 // =========================================================================
-
-function Scene_Coop() {
-    this.initialize(...arguments);
-}
+function Scene_Coop() { this.initialize(...arguments); }
 Scene_Coop.prototype = Object.create(Scene_MenuBase.prototype);
 Scene_Coop.prototype.constructor = Scene_Coop;
 
-Scene_Coop.prototype.initialize = function() {
-    Scene_MenuBase.prototype.initialize.call(this);
-};
-
+Scene_Coop.prototype.initialize = function() { Scene_MenuBase.prototype.initialize.call(this); };
 Scene_Coop.prototype.create = function() {
     Scene_MenuBase.prototype.create.call(this);
     this.createBackground();
@@ -62,7 +56,7 @@ Scene_Coop.prototype.create = function() {
 };
 
 Scene_Coop.prototype.createCoopWindow = function() {
-    const rect = new Rectangle(0, 0, 320, 180); // Увеличили высоту под новые кнопки
+    const rect = new Rectangle(0, 0, 320, 180);
     rect.x = (Graphics.width - rect.width) / 2;
     rect.y = (Graphics.height - rect.height) / 2;
     this._coopWindow = new Window_Coop(rect);
@@ -87,93 +81,62 @@ Scene_Coop.prototype.updateStatus = function(text) {
     this._statusWindow.drawText(text, 0, 0, this._statusWindow.innerWidth, "center");
 };
 
-// --- НОВАЯ ИГРА (ХОСТ) ---
+// --- ХОСТ (НОВАЯ) ---
 Scene_Coop.prototype.commandHost = function() {
     this._coopWindow.deactivate();
     window.CoopNetwork.isHost = true;
-    
     const code = Math.floor(1000 + Math.random() * 9000).toString();
     window.CoopNetwork.roomCode = code;
     window.CoopNetwork.peer = new Peer("RPGMZ_" + code);
-
     this.updateStatus("Создание комнаты... Код: " + code);
-
-    window.CoopNetwork.peer.on('open', (id) => {
-        this.updateStatus("Комната создана! Код для друга: " + code + "\nЖдем подключения...");
-    });
-
+    window.CoopNetwork.peer.on('open', (id) => this.updateStatus("Комната создана! Код: " + code + "\nЖдем подключения..."));
     window.CoopNetwork.peer.on('connection', (conn) => {
         window.CoopNetwork.connection = conn;
-        this.setupConnection(false); // false = не загружать сохранение
+        this.setupConnection(false);
     });
-
     window.CoopNetwork.peer.on('error', (err) => {
-        console.error(err);
-        if (err.type === 'unavailable-id') {
-            this.updateStatus("Ошибка: Код занят. Попробуйте еще раз.");
-            this._coopWindow.activate();
-        }
+        if (err.type === 'unavailable-id') { this.updateStatus("Ошибка: Код занят."); this._coopWindow.activate(); }
     });
 };
 
-// --- ЗАГРУЗКА ИГРЫ (ХОСТ) ---
+// --- ХОСТ (ЗАГРУЗКА) ---
 Scene_Coop.prototype.commandHostLoad = function() {
     this._coopWindow.deactivate();
     window.CoopNetwork.isHost = true;
-    
     const code = Math.floor(1000 + Math.random() * 9000).toString();
     window.CoopNetwork.roomCode = code;
     window.CoopNetwork.peer = new Peer("RPGMZ_" + code);
-
     this.updateStatus("Создание комнаты... Код: " + code);
-
-    window.CoopNetwork.peer.on('open', (id) => {
-        this.updateStatus("Комната создана! Код: " + code + "\nЖдем подключения...");
-    });
-
+    window.CoopNetwork.peer.on('open', (id) => this.updateStatus("Комната создана! Код: " + code + "\nЖдем подключения..."));
     window.CoopNetwork.peer.on('connection', (conn) => {
         window.CoopNetwork.connection = conn;
-        this.setupConnection(true); // true = загрузить сохранение
+        this.setupConnection(true);
     });
-
     window.CoopNetwork.peer.on('error', (err) => {
-        console.error(err);
-        if (err.type === 'unavailable-id') {
-            this.updateStatus("Ошибка: Код занят. Попробуйте еще раз.");
-            this._coopWindow.activate();
-        }
+        if (err.type === 'unavailable-id') { this.updateStatus("Ошибка: Код занят."); this._coopWindow.activate(); }
     });
 };
 
-// --- ВХОД В ИГРУ (ГОСТЬ) ---
+// --- ГОСТЬ ---
 Scene_Coop.prototype.commandGuest = function() {
     this._coopWindow.deactivate();
     window.CoopNetwork.isHost = false;
-
     const code = prompt("Введите код комнаты (4 цифры):");
     if (!code || code.length !== 4) {
-        this.updateStatus("Неверный код. Попробуйте снова.");
+        this.updateStatus("Неверный код.");
         this._coopWindow.activate();
         return;
     }
-
     this.updateStatus("Подключение к комнате " + code + "...");
     window.CoopNetwork.peer = new Peer();
-
     window.CoopNetwork.peer.on('open', () => {
         window.CoopNetwork.connection = window.CoopNetwork.peer.connect("RPGMZ_" + code);
-        this.setupConnection(false); // Гость никогда не загружает локально
+        this.setupConnection(false);
     });
-
     window.CoopNetwork.peer.on('error', (err) => {
-        console.error(err);
-        if (err.type === 'peer-unavailable') {
-            this.updateStatus("Комната не найдена. Проверьте код.");
-            this._coopWindow.activate();
-        }
+        if (err.type === 'peer-unavailable') { this.updateStatus("Комната не найдена."); this._coopWindow.activate(); }
     });
 };
-
 
 // --- НАСТРОЙКА СОЕДИНЕНИЯ ---
 Scene_Coop.prototype.setupConnection = function(isLoad) {
@@ -181,43 +144,60 @@ Scene_Coop.prototype.setupConnection = function(isLoad) {
         window.CoopNetwork.myActorId = window.CoopNetwork.isHost ? 1 : 2;
         this.updateStatus("Успешное подключение!");
         
-        setTimeout(() => {
+        if (window.CoopNetwork.isHost) {
             if (isLoad) {
-                // Открываем стандартное окно загрузки RPG Maker
-                SceneManager.push(Scene_Load);
+                SceneManager.push(Scene_Load); // Хост грузит сейв
             } else {
-                // Начинаем новую игру
-                DataManager.setupNewGame();
-                if (!window.CoopNetwork.isHost) {
-                    $gameParty._actors = [2, 1]; // Гость играет за Мишель
-                    $gamePlayer.refresh();
-                }
+                DataManager.setupNewGame(); // Хост начинает новую
+                $gameParty._actors = [1];
+                $gamePlayer.refresh();
                 SceneManager.goto(Scene_Map);
             }
-        }, 1000);
+        }
+        // Гость НЕ делает ничего. Он ждет пакет full_sync_state, чтобы запуститься.
     });
 
-        window.CoopNetwork.connection.on('data', (data) => {
+    window.CoopNetwork.connection.on('data', (data) => {
         window.CoopNetwork.isReceivingData = true; 
         
         if (data.type === 'position') {
             window.CoopNetwork.partnerData = data.payload;
         } 
-        else if (data.type === 'self_switch') {
+        else if (data.type === 'switch_update') {
+            $gameSwitches.setValue(data.payload.id, data.payload.value);
+        }
+        else if (data.type === 'variable_update') {
+            $gameVariables.setValue(data.payload.id, data.payload.value);
+        }
+        else if (data.type === 'full_sync_state') {
             const p = data.payload;
-            const key = [p.mapId, p.eventId, p.switchName];
-            $gameSelfSwitches.setValue(key, p.value);
-            if ($gameMap.mapId() === p.mapId) {
-                $gameMap.refresh(); 
+            if (SceneManager._scene instanceof Scene_Coop) {
+                // ГОСТЬ В МЕНЮ: Запускаем ему игру и телепортируем на карту Хоста
+                DataManager.setupNewGame();
+                $gameParty._actors = [2];
+                $gamePlayer.refresh();
+                $gamePlayer.reserveTransfer(p.mapId, p.x, p.y, 0, 0);
+                SceneManager.goto(Scene_Map);
+                // Сохраняем стейт, чтобы применить его когда карта Гостя загрузится
+                window.CoopNetwork.pendingSync = p;
+                        } else {
+                // ГОСТЬ В ИГРЕ: Хост перешел на другую карту. 
+                $gameSwitches._data = p.switches;
+                $gameVariables._data = p.variables;
+                if ($gameMap.mapId() !== p.mapId) {
+                    // Даем браузеру 300мс на подготовку к новой карте
+                    setTimeout(() => {
+                        $gamePlayer.reserveTransfer(p.mapId, p.x, p.y, 0, 0);
+                        window.CoopNetwork.pendingSync = p;
+                    }, 300);
+                } else {
+                    $gameMap.refresh();
+                }
             }
         }
-        // НОВОЕ: Хост получает инвентарь от Гостя и сохраняет в памяти
         else if (data.type === 'guest_state_update') {
-            if (window.CoopNetwork.isHost) {
-                window.CoopNetwork.guestState = data.payload;
-            }
+            if (window.CoopNetwork.isHost) window.CoopNetwork.guestState = data.payload;
         }
-        // НОВОЕ: Гость получает свой старый инвентарь от Хоста при загрузке
         else if (data.type === 'restore_guest_state') {
             if (!window.CoopNetwork.isHost) {
                 const p = data.payload;
@@ -225,8 +205,6 @@ Scene_Coop.prototype.setupConnection = function(isLoad) {
                 $gameParty._weapons = p.weapons;
                 $gameParty._armors = p.armors;
                 $gameParty._gold = p.gold;
-                $gamePlayer.reserveTransfer(p.mapId, p.x, p.y, 2, 0); // Телепортируем гостя на его место
-                $gameMessage.add("Ваши данные синхронизированы с Хостом.");
             }
         }
         
@@ -239,16 +217,10 @@ Scene_Coop.prototype.setupConnection = function(isLoad) {
     });
 };
 
-function Window_Coop() {
-    this.initialize(...arguments);
-}
+function Window_Coop() { this.initialize(...arguments); }
 Window_Coop.prototype = Object.create(Window_Command.prototype);
 Window_Coop.prototype.constructor = Window_Coop;
-
-Window_Coop.prototype.initialize = function(rect) {
-    Window_Command.prototype.initialize.call(this, rect);
-};
-
+Window_Coop.prototype.initialize = function(rect) { Window_Command.prototype.initialize.call(this, rect); };
 Window_Coop.prototype.makeCommandList = function() {
     this.addCommand("Новая игра (Хост)", "host");
     this.addCommand("Загрузить игру (Хост)", "host_load");
@@ -256,28 +228,48 @@ Window_Coop.prototype.makeCommandList = function() {
     this.addCommand("Назад", "cancel");
 };
 
+// =========================================================================
+// 3. СИНХРОНИЗАЦИЯ ПРИ ЗАГРУЗКЕ КАРТЫ (ФИКС ДЕСИНХРОНА)
+// =========================================================================
+const _Scene_Map_start = Scene_Map.prototype.start;
+Scene_Map.prototype.start = function() {
+    _Scene_Map_start.call(this);
+    
+    // Если мы Хост, и Гость подключен, отправляем ему актуальный стейт
+    if (window.CoopNetwork.isHost && window.CoopNetwork.connection && window.CoopNetwork.connection.open) {
+        window.CoopNetwork.connection.send({
+            type: 'full_sync_state',
+            payload: {
+                switches: $gameSwitches._data,
+                variables: $gameVariables._data,
+                mapId: $gameMap.mapId(),
+                x: $gamePlayer.x,
+                y: $gamePlayer.y
+            }
+        });
+    }
+    
+    // Если мы Гость, и у нас есть ожидающие данные от Хоста — применяем их
+    if (!window.CoopNetwork.isHost && window.CoopNetwork.pendingSync) {
+        $gameSwitches._data = window.CoopNetwork.pendingSync.switches;
+        $gameVariables._data = window.CoopNetwork.pendingSync.variables;
+        $gameMap.refresh();
+        window.CoopNetwork.pendingSync = null; // Очищаем
+    }
+};
 
 // =========================================================================
-// 3. СИНХРОНИЗАЦИЯ ИГРОКОВ НА КАРТЕ (Призрак)
+// 4. СИНХРОНИЗАЦИЯ ИГРОКОВ НА КАРТЕ
 // =========================================================================
-
 const _Game_Player_update = Game_Player.prototype.update;
 Game_Player.prototype.update = function(sceneActive) {
     _Game_Player_update.call(this, sceneActive);
-    
     if (window.CoopNetwork.connection && window.CoopNetwork.connection.open) {
-        // Отправляем данные ТОЛЬКО когда двигаемся или жмем кнопки
         if (this.isMoving() || Input.dir4 > 0) {
-            const myData = {
+            window.CoopNetwork.connection.send({
                 type: 'position',
-                payload: {
-                    x: this.x,
-                    y: this.y,
-                    mapId: $gameMap.mapId(),
-                    direction: this.direction()
-                }
-            };
-            window.CoopNetwork.connection.send(myData);
+                payload: { x: this.x, y: this.y, mapId: $gameMap.mapId(), direction: this.direction() }
+            });
         }
     }
 };
@@ -290,18 +282,11 @@ Spriteset_Map.prototype.createLowerLayer = function() {
 
 Spriteset_Map.prototype.createCoopGhost = function() {
     this._coopGhostChar = new Game_Character();
-    
-    // Настраиваем внешность призрака в зависимости от того, кто наш партнер
-    // Хост видит Мишель (2), Гость видит Рида (1)
     const partnerActorId = window.CoopNetwork.isHost ? 2 : 1;
     const actor = $gameActors.actor(partnerActorId);
-    if (actor) {
-        this._coopGhostChar.setImage(actor.characterName(), actor.characterIndex());
-    } else {
-        this._coopGhostChar.setImage("Actor1", 0); // Запасной вариант
-    }
+    if (actor) this._coopGhostChar.setImage(actor.characterName(), actor.characterIndex());
+    else this._coopGhostChar.setImage("Actor1", 0);
     this._coopGhostChar.setDirection(2);
-    
     this._coopGhost = new Sprite_Character(this._coopGhostChar);
     this._tilemap.addChild(this._coopGhost);
 };
@@ -313,124 +298,85 @@ Spriteset_Map.prototype.update = function() {
         const data = window.CoopNetwork.partnerData;
         if (data.mapId === $gameMap.mapId()) {
             this._coopGhost.opacity = 255;
-            
-            // ВАЖНО: Обновляем логику персонажа, чтобы он мог двигаться
             this._coopGhostChar.update();
-            
-            // Вычисляем дистанцию между призраком и его реальной позицией
             const dist = Math.abs(this._coopGhostChar.x - data.x) + Math.abs(this._coopGhostChar.y - data.y);
-            
             if (dist > 1) {
-                // Если игрок телепортировался или мы сильно отстали, прыгаем к нему
                 this._coopGhostChar.locate(data.x, data.y);
                 this._coopGhostChar.setDirection(data.direction);
             } else if (dist > 0 && !this._coopGhostChar.isMoving()) {
-                // Если расстояние 1 клетка и мы не двигаемся — делаем шаг к цели
                 const dir = this._coopGhostChar.findDirectionTo(data.x, data.y);
-                if (dir > 0) {
-                    this._coopGhostChar.moveStraight(dir);
-                }
+                if (dir > 0) this._coopGhostChar.moveStraight(dir);
             } else if (dist === 0 && !this._coopGhostChar.isMoving()) {
-                // Если стоим на месте, синхронизируем направление взгляда
                 this._coopGhostChar.setDirection(data.direction);
             }
         } else {
-            this._coopGhost.opacity = 0; // Скрываем, если на разных картах
+            this._coopGhost.opacity = 0;
         }
     }
 };
 
 // =========================================================================
-// 4. СИНХРОНИЗАЦИЯ ЛОКАЛЬНЫХ ПЕРЕКЛЮЧАТЕЛЕЙ (Self-Switches)
+// 5. ПЕРЕХВАТ СВИТЧЕЙ И ПЕРЕМЕННЫХ
 // =========================================================================
-
-const _Game_SelfSwitches_setValue = Game_SelfSwitches.prototype.setValue;
-Game_SelfSwitches.prototype.setValue = function(key, value) {
-    // Сначала применяем у себя
-    _Game_SelfSwitches_setValue.call(this, key, value); 
-
-    // Отправляем по сети ТОЛЬКО если соединение активно и МЫ не просто получили эти данные
+const _Game_Switches_setValue = Game_Switches.prototype.setValue;
+Game_Switches.prototype.setValue = function(switchId, value) {
+    _Game_Switches_setValue.call(this, switchId, value);
     if (window.CoopNetwork.connection && window.CoopNetwork.connection.open && !window.CoopNetwork.isReceivingData) {
-        const data = {
-            type: 'self_switch',
-            payload: {
-                mapId: key[0],
-                eventId: key[1],
-                switchName: key[2], // Обычно 'A', 'B', 'C' или 'D'
-                value: value
-            }
-        };
-        window.CoopNetwork.connection.send(data);
+        window.CoopNetwork.connection.send({ type: 'switch_update', payload: { id: switchId, value: value } });
+    }
+};
+
+const _Game_Variables_setValue = Game_Variables.prototype.setValue;
+Game_Variables.prototype.setValue = function(variableId, value) {
+    _Game_Variables_setValue.call(this, variableId, value);
+    if (window.CoopNetwork.connection && window.CoopNetwork.connection.open && !window.CoopNetwork.isReceivingData) {
+        window.CoopNetwork.connection.send({ type: 'variable_update', payload: { id: variableId, value: value } });
     }
 };
 
 // =========================================================================
-// 5. ЗАПРЕТ СОХРАНЕНИЯ ДЛЯ ГОСТЯ
+// 6. ЗАПРЕТ СОХРАНЕНИЯ ГОСТЯ И СОХРАНЕНИЕ ЕГО ИНВЕНТАРЯ
 // =========================================================================
 const _Window_MenuCommand_addSaveCommand = Window_MenuCommand.prototype.addSaveCommand;
 Window_MenuCommand.prototype.addSaveCommand = function() {
-    // Если мы гость и в сети - прячем кнопку сохранения
     const isGuest = window.CoopNetwork.connection && !window.CoopNetwork.isHost;
-    if (!isGuest) {
-        _Window_MenuCommand_addSaveCommand.call(this);
-    }
+    if (!isGuest) _Window_MenuCommand_addSaveCommand.call(this);
 };
 
-// =========================================================================
-// 6. СОХРАНЕНИЕ И ВОССТАНОВЛЕНИЕ ДАННЫХ ГОСТЯ У ХОСТА
-// =========================================================================
-
-// Хранилище в памяти для данных гостя
-window.CoopNetwork.guestState = null;
-
-// А) Отправка данных. Гость шлет свой инвентарь Хосту при каждом получении предмета
 const _Game_Party_gainItem = Game_Party.prototype.gainItem;
 Game_Party.prototype.gainItem = function(item, amount, includeEquip) {
     _Game_Party_gainItem.call(this, item, amount, includeEquip);
-    
-    // Если мы Гость и мы в сети - отправляем свой инвентарь Хосту
     if (window.CoopNetwork.connection && window.CoopNetwork.connection.open && !window.CoopNetwork.isHost) {
-        const state = {
+        window.CoopNetwork.connection.send({
             type: 'guest_state_update',
             payload: {
-                items: $gameParty._items,
-                weapons: $gameParty._weapons,
-                armors: $gameParty._armors,
-                gold: $gameParty._gold,
-                mapId: $gameMap.mapId(),
-                x: $gamePlayer.x,
-                y: $gamePlayer.y
+                items: $gameParty._items, weapons: $gameParty._weapons, armors: $gameParty._armors,
+                gold: $gameParty._gold, mapId: $gameMap.mapId(), x: $gamePlayer.x, y: $gamePlayer.y
             }
-        };
-        window.CoopNetwork.connection.send(state);
+        });
     }
 };
 
-// Б) Упаковка в сейв Хоста. Перехватываем создание сохранения
 const _DataManager_makeSaveContents = DataManager.makeSaveContents;
 DataManager.makeSaveContents = function() {
     const contents = _DataManager_makeSaveContents.call(this);
-    // Если мы Хост и гость подключен, прячем его данные в наш сейв
     if (window.CoopNetwork.isHost && window.CoopNetwork.guestState) {
         contents.coopGuestState = window.CoopNetwork.guestState;
     }
     return contents;
 };
 
-// В) Распаковка из сейва Хоста. Перехватываем загрузку сохранения
 const _DataManager_extractSaveContents = DataManager.extractSaveContents;
 DataManager.extractSaveContents = function(contents) {
     _DataManager_extractSaveContents.call(this, contents);
-    // Если мы Хост, достаем данные гостя из сейва
+    if (window.CoopNetwork.connection) {
+        $gameParty._actors = [window.CoopNetwork.isHost ? 1 : 2];
+        $gamePlayer.refresh();
+    }
     if (contents.coopGuestState) {
         window.CoopNetwork.guestState = contents.coopGuestState;
-        
-        // Если гость сейчас в сети, сразу отправляем ему его вещи!
         if (window.CoopNetwork.connection && window.CoopNetwork.connection.open) {
-            window.CoopNetwork.connection.send({
-                type: 'restore_guest_state',
-                payload: window.CoopNetwork.guestState
-            });
+            window.CoopNetwork.connection.send({ type: 'restore_guest_state', payload: window.CoopNetwork.guestState });
         }
     } else {
         window.CoopNetwork.guestState = null;
