@@ -87,7 +87,9 @@ Scene_Coop.prototype.commandHost = function() {
     window.CoopNetwork.isHost = true;
     const code = Math.floor(1000 + Math.random() * 9000).toString();
     window.CoopNetwork.roomCode = code;
-    window.CoopNetwork.peer = new Peer("RPGMZ_" + code);
+    // ДОБАВИЛИ { secure: true }
+    window.CoopNetwork.peer = new Peer("RPGMZ_" + code, { secure: true }); 
+    
     this.updateStatus("Создание комнаты... Код: " + code);
     window.CoopNetwork.peer.on('open', (id) => this.updateStatus("Комната создана! Код: " + code + "\nЖдем подключения..."));
     window.CoopNetwork.peer.on('connection', (conn) => {
@@ -105,7 +107,9 @@ Scene_Coop.prototype.commandHostLoad = function() {
     window.CoopNetwork.isHost = true;
     const code = Math.floor(1000 + Math.random() * 9000).toString();
     window.CoopNetwork.roomCode = code;
-    window.CoopNetwork.peer = new Peer("RPGMZ_" + code);
+    // ДОБАВИЛИ { secure: true }
+    window.CoopNetwork.peer = new Peer("RPGMZ_" + code, { secure: true });
+    
     this.updateStatus("Создание комнаты... Код: " + code);
     window.CoopNetwork.peer.on('open', (id) => this.updateStatus("Комната создана! Код: " + code + "\nЖдем подключения..."));
     window.CoopNetwork.peer.on('connection', (conn) => {
@@ -128,7 +132,9 @@ Scene_Coop.prototype.commandGuest = function() {
         return;
     }
     this.updateStatus("Подключение к комнате " + code + "...");
-    window.CoopNetwork.peer = new Peer();
+    // ДОБАВИЛИ { secure: true }
+    window.CoopNetwork.peer = new Peer({ secure: true });
+    
     window.CoopNetwork.peer.on('open', () => {
         window.CoopNetwork.connection = window.CoopNetwork.peer.connect("RPGMZ_" + code);
         this.setupConnection(false);
